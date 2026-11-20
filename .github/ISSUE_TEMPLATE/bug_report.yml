@@ -1,0 +1,28 @@
+name: Bug report
+description: Something does not work
+labels: [bug]
+body:
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options: [Android, Windows]
+    validations: {required: true}
+  - type: input
+    id: version
+    attributes: {label: App version}
+    validations: {required: true}
+  - type: input
+    id: os
+    attributes:
+      label: Android or Windows version
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened and what did you expect
+    validations: {required: true}
+  - type: textarea
+    id: log
+    attributes:
+      label: Diagnose or log text
+      description: Remove server addresses, UUIDs and passwords first.

@@ -1,0 +1,23 @@
+# secrets and local data: never commit
+*.keystore
+*.jks
+*.pfx
+*.p12
+local.properties
+servers.json
+selected.txt
+core.log
+config.json
+# build output
+bin/
+obj/
+out/
+dist/
+build/
+.gradle/
+windows/installer/Output/
+android/v2ray/
+android/engine-version.txt
+.vs/
+.idea/
+*.user

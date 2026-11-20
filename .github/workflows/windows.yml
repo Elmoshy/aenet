@@ -1,0 +1,73 @@
+name: Windows
+on:
+  push:
+    branches: [main]
+    paths: ['windows/**', '.github/workflows/windows.yml']
+  pull_request:
+    paths: ['windows/**', '.github/workflows/windows.yml']
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      version:
+        type: string
+        default: dev
+env:
+  # optional code signing: add these two repository secrets once you own a certificate
+  PFX_BASE64: ${{ secrets.SIGN_PFX_BASE64 }}
+  PFX_PASSWORD: ${{ secrets.SIGN_PFX_PASSWORD }}
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: windows
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Version
+        env:
+          VER: ${{ inputs.version }}
+        run: |
+          $v = "$env:VER".TrimStart('v')
+          if ($v -match '^\d+\.\d+\.\d+') { $v = $Matches[0] } else { $v = '0.0.0' }
+          "VERSION=$v" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: Publish
+        run: dotnet publish BatV2.csproj -c Release -o out -p:Version=$env:VERSION
+      - name: Fetch Xray engine
+        run: |
+          # v25.5.16 is the same Xray version NetMod ships. It still honors allowInsecure (new Xray removed it)
+          Invoke-WebRequest "https://github.com/XTLS/Xray-core/releases/download/v25.5.16/Xray-windows-64.zip" -OutFile xray.zip
+          Expand-Archive xray.zip -DestinationPath xray-dl
+      - name: Package
+        run: |
+          New-Item -ItemType Directory -Force dist/xray | Out-Null
+          Copy-Item out/* dist/ -Recurse -Exclude *.pdb
+          Copy-Item xray-dl/xray.exe dist/xray/
+          Copy-Item ../LICENSE dist/LICENSE.txt
+          Copy-Item ../NOTICE.md dist/NOTICE.md
+      - name: Sign app (optional)
+        if: env.PFX_BASE64 != ''
+        run: |
+          [IO.File]::WriteAllBytes("cert.pfx", [Convert]::FromBase64String($env:PFX_BASE64))
+          $st = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter signtool.exe | Where-Object FullName -like "*\x64\*" | Select-Object -Last 1).FullName
+          & $st sign /f cert.pfx /p $env:PFX_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 dist/BatV2.exe
+      - name: Build installer
+        run: |
+          choco install innosetup -y --no-progress
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DAppVersion=$env:VERSION" installer\BatV2.iss
+      - name: Sign installer (optional)
+        if: env.PFX_BASE64 != ''
+        run: |
+          $st = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter signtool.exe | Where-Object FullName -like "*\x64\*" | Select-Object -Last 1).FullName
+          & $st sign /f cert.pfx /p $env:PFX_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 installer/Output/BatV2-Setup.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AENET-windows-setup
+          path: windows/installer/Output/BatV2-Setup.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AENET-windows-portable
+          path: windows/dist

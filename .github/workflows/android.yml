@@ -1,0 +1,94 @@
+name: Android
+on:
+  push:
+    branches: [main]
+    paths: ['android/**', '.github/workflows/android.yml']
+  pull_request:
+    paths: ['android/**', '.github/workflows/android.yml']
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      version:
+        type: string
+        default: dev
+      require_signing:
+        type: boolean
+        default: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Fetch engine module
+        run: bash ./scripts/fetch_v2ray.sh
+
+      - name: Show the engine version
+        run: |
+          {
+            echo "### Engine module"
+            echo '```'
+            cat engine-version.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Signing key
+        env:
+          KS: ${{ secrets.KEYSTORE_B64 }}
+          KS_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
+          KS_KEYPASS: ${{ secrets.KEY_PASSWORD }}
+          REQUIRE: ${{ inputs.require_signing }}
+        run: |
+          if [ -z "$KS" ]; then
+            if [ "$REQUIRE" = "true" ]; then
+              echo "::error::Release builds need the signing secrets (KEYSTORE_B64, KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD)"
+              exit 1
+            fi
+            keytool -genkeypair -keystore bat.keystore -alias bat -keyalg RSA -keysize 2048 \
+              -validity 10000 -storepass batbatbat -keypass batbatbat -dname "CN=AENET-CI"
+            echo "::warning::No signing secrets found, made a temporary key (updates will need an uninstall first)"
+            exit 0
+          fi
+          if [ -z "$KS_PASS" ]; then
+            echo "::error::KEYSTORE_B64 is set but KEYSTORE_PASSWORD is missing"
+            exit 1
+          fi
+          printf '%s' "$KS" | tr -d ' \r\n' | base64 -d > bat.keystore
+          STOREPASS="$(printf '%s' "$KS_PASS" | tr -d '\r\n')"
+          LIST="$(keytool -list -v -keystore bat.keystore -storepass "$STOREPASS" 2>&1 || true)"
+          ALIAS="$(printf '%s\n' "$LIST" | sed -n 's/^Alias name: //p' | head -n 1 | tr -d '\r')"
+          if [ -z "$ALIAS" ]; then
+            echo "::error::cannot read the keystore: wrong KEYSTORE_PASSWORD or the KEYSTORE_B64 text is broken"
+            exit 1
+          fi
+          if printf '%s\n' "$LIST" | grep -qi "Keystore type: PKCS12"; then
+            KEYPASS="$STOREPASS"
+          else
+            KEYPASS="$(printf '%s' "${KS_KEYPASS:-$KS_PASS}" | tr -d '\r\n')"
+          fi
+          echo "KEYSTORE_PASSWORD=$STOREPASS" >> "$GITHUB_ENV"
+          echo "KEY_ALIAS=$ALIAS" >> "$GITHUB_ENV"
+          echo "KEY_PASSWORD=$KEYPASS" >> "$GITHUB_ENV"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Build
+        env:
+          VER: ${{ inputs.version }}
+        run: |
+          V="${VER#v}"; [ -z "$V" ] || [ "$V" = "dev" ] && V="0.0.0-dev"
+          gradle :app:assembleRelease --no-daemon -PversionName="$V" -PversionCode="$((100 + GITHUB_RUN_NUMBER))"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AENET-android
+          path: android/app/build/outputs/apk/release/*.apk
